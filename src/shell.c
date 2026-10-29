@@ -290,6 +290,8 @@ static int shellCmdLineEdit = SHELL_CMDLINE_EDIT_AVAILABLE;
 #define IsAlnum(X)  isalnum((unsigned char)X)
 #define IsAlpha(X)  isalpha((unsigned char)X)
 
+#include "loadembeddeddb.h"
+
 #if defined(_WIN32) || defined(WIN32)
 #undef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -336,6 +338,8 @@ extern LPWSTR sqlite3_win32_utf8_to_unicode(const char *zText);
 #include <stdio.h>
 #include <stdarg.h>
 #include <windows.h>
+
+#include "libfmemopen.h"
 
 FILE *sqlite3_fopen(const char *zFilename, const char *zMode);
 FILE *sqlite3_popen(const char *zCommand, const char *type);
@@ -480,6 +484,61 @@ FILE *sqlite3_fopen(const char *zFilename, const char *zMode){
   return fp;
 }
 
+#if SQLITE_DEBUG
+	#define IFSQLITEDEBUG(x) x
+#else
+	#define IFSQLITEDEBUG(x)
+#endif
+
+FILE *sqlite3_fopen_query(const char *zFilename, const char *zMode, sqlite3* db){
+	IFSQLITEDEBUG( if (db==NULL){ fprintf(stderr, "trace: sqlite3_fopen_query, db is NULL!\r\n"); } )
+
+	sqlite3_stmt* pStmt;
+	int prepare_result;
+	if (strlen(zFilename)>7 && strncmp(":query:", zFilename, 7)==0){
+		const char* qry = zFilename + 7;
+		prepare_result = sqlite3_prepare_v2(
+			db,            /* Database handle */
+			qry,           /* SQL statement, UTF-8 encoded */
+			-1,            /* Maximum length of zSql in bytes. */
+			&pStmt,        /* OUT: Statement handle */
+			NULL           /* OUT: Pointer to unused portion of zSql */
+		) ;
+	} else if (strlen(zFilename)>4 && strncmp(":ar:", zFilename, 4)==0){
+		const char* fname = zFilename + 4;
+		const char* qry = "select sqlar_uncompress(data, sz) from sqlar where name=?";
+		IFSQLITEDEBUG(fprintf(stderr, "trace: .read :ar:, zFilename=%s, qry=%s\r\n", zFilename, qry));
+		prepare_result = sqlite3_prepare_v2(
+			db,            /* Database handle */
+			qry,           /* SQL statement, UTF-8 encoded */
+			-1,            /* Maximum length of zSql in bytes. */
+			&pStmt,        /* OUT: Statement handle */
+			NULL           /* OUT: Pointer to unused portion of zSql */
+		) ;
+		IFSQLITEDEBUG(fprintf(stderr, "trace: prepare_result was %d, now binding fname=%s...\r\n", prepare_result, fname));
+		sqlite3_bind_text(pStmt, 1, fname, -1, SQLITE_TRANSIENT);
+	} else {
+		IFSQLITEDEBUG(fprintf(stderr, "trace: sqlite3_fopen_query, zFilename=%s, not a query\r\n", zFilename));
+		return NULL;
+	}
+
+	if (prepare_result == SQLITE_OK){
+		int s = sqlite3_step(pStmt);
+		if (s==SQLITE_ROW || s==SQLITE_DONE){
+			const char* txt = (const char*) sqlite3_column_text(pStmt, 0);
+			IFSQLITEDEBUG(fprintf(stderr, "trace: sqlite3_column_text = %s\r\n", txt));
+			FILE* f = fmemopen((void*)txt, strlen(txt)+1, "rb");
+			sqlite3_finalize(pStmt);
+			return f;
+		} else {
+			IFSQLITEDEBUG(fprintf(stderr, "trace: sqlite3_fopen_query, sqlite3_step failed\r\n"));
+			return NULL;
+		}
+	} else {
+		IFSQLITEDEBUG(fprintf(stderr, "trace: sqlite3_fopen_query, sqlite3_prepare_v2 failed (result=%d)\r\n", prepare_result));
+		return NULL;
+	}
+}
 
 /*
 ** Work-alike for the popen() routine from the standard C library.
@@ -30065,9 +30124,19 @@ static void open_db(ShellState *p, int openFlags){
       }
       case SHELL_OPEN_UNSPEC:
       case SHELL_OPEN_NORMAL: {
-        sqlite3_open_v2(zDbFilename, &p->db, p->openFlags, 0);
-        break;
-      }
+
+		if(!strcmp(zDbFilename, ":embedded:")){
+			IFSQLITEDEBUG(fprintf(stderr, ":embedded:!\n"));
+			if (p->db == 0) sqlite3_open(":memory:", &p->db);
+
+			const int loadResourceResult = LoadBinaryResourceIntoSqliteDb(p->db);
+
+			IFSQLITEDEBUG(fprintf(stderr, ":embedded:, result=%d\n", loadResourceResult));
+		} else {
+			sqlite3_open_v2(zDbFilename, &p->db, p->openFlags, 0);
+		}
+		break;
+	  }
     }
     if( p->db==0 || SQLITE_OK!=sqlite3_errcode(p->db) ){
       cli_printf(stderr,"Error: unable to open database \"%s\": %s\n",
@@ -36568,15 +36637,18 @@ static int do_meta_command(const char *zLine, ShellState *p){
         pclose(p->in);
       }
 #endif
-    }else if( (p->in = openChrSource(azArg[1]))==0 ){
-      cli_printf(stderr,"Error: cannot open \"%s\"\n", azArg[1]);
-      rc = 1;
-    }else{
-      char *zFilename = strdup(azArg[1]);
-      rc = process_input(p, zFilename);
-      free(zFilename);
-      fclose(p->in);
-    }
+    }else if (
+    	(p->in = sqlite3_fopen_query(azArg[1], "rb", p->db)) == 0
+    	&& (p->in = openChrSource(azArg[1]))==0
+	){
+	  cli_printf(stderr,"Error: cannot open query/chrsource \"%s\"\n", azArg[1]);
+	  rc = 1;
+	}else{
+	  char *zFilename = strdup(azArg[1]);
+	  rc = process_input(p, zFilename);
+	  free(zFilename);
+	  fclose(p->in);
+	}
     p->in = inSaved;
     p->lineno = savedLineno;
   }else
@@ -39372,8 +39444,8 @@ int SQLITE_CDECL main(int argc, char **argv){
 
   if( data.pAuxDb->zDbFilename==0 ){
 #ifndef SQLITE_OMIT_MEMORYDB
-    data.pAuxDb->zDbFilename = ":memory:";
-    warnInmemoryDb = argc==1;
+    data.pAuxDb->zDbFilename = ":embedded:";
+    warnInmemoryDb = 0;
 #else
     cli_printf(stderr,
                     "%s: Error: no database filename specified\n", Argv0);
@@ -39712,6 +39784,7 @@ int SQLITE_CDECL main(int argc, char **argv){
 #endif
       data.in = 0;
       open_db(&data, 0);
+      rc = do_meta_command(".read \":ar:main.sql\"", &data);
       rc = process_input(&data, "<stdin>");
       if( zHistory ){
         shell_stifle_history(2000);
@@ -39720,6 +39793,8 @@ int SQLITE_CDECL main(int argc, char **argv){
       }
     }else{
       data.in = stdin;
+      open_db(&data, 0);
+      rc = do_meta_command(".read \":ar:main.sql\"", &data);
       rc = process_input(&data, "<stdin>");
     }
   }

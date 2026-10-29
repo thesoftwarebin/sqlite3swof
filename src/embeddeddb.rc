@@ -1,0 +1,3 @@
+#include "embeddeddbrc.h"
+
+IDR_EMPBEDDEDDB RCDATA "../assets/empty.sqlite3"

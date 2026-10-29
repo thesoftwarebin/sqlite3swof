@@ -1,0 +1,6 @@
+#ifndef SRC_EMBEDDEDDBRC_H_
+#define SRC_EMBEDDEDDBRC_H_
+
+#define IDR_EMPBEDDEDDB 101
+
+#endif /* SRC_EMBEDDEDDBRC_H_ */
