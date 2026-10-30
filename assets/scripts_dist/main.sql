@@ -1,0 +1,2 @@
+.read :ar:help.sql
+
