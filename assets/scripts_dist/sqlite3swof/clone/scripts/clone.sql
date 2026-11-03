@@ -18,12 +18,25 @@ vacuum;
 .mode tabs --quote off
 select printf('[ INFO ] new db size is %d = 0x%x bytes', @_swof_dbsize, @_swof_dbsize);
 
+.print "[ INFO ] find file offset of .rsrc (before inserting the new db)..."
+.param set @_swof_clone_patch_addr 0x2dc
+.read :ar:sqlite3swof/clone/scripts/clone_patch_get_dword_0.sql
+.param set @_swof_rsrc_before @_swof_clone_patch_val_original
+
+.print "[ INFO ] find file offset of .reloc (before inserting the new db)..."
+.param set @_swof_clone_patch_addr 0x304
+.read :ar:sqlite3swof/clone/scripts/clone_patch_get_dword_0.sql
+.param set @_swof_reloc_before @_swof_clone_patch_val_original
+
 -- file offset of the embedded sqlite db inside @_swof_tmplexe
-.param set @_swof_dbaddr 0x1e5400+0xa0
+.param set @_swof_dbaddr @_swof_rsrc_before+0xa0
+select printf('[ INFO ] @_swof_dbaddr = 0x%08x', @_swof_dbaddr);
 
 -- file offset of the embedded manifest inside @_swof_tmplexe
-.param set @_swof_mnaddr 0x1e5400+0xa0
-.param set @_swof_mnsize "0x1e5a00-@_swof_mnaddr"
+.param set @_swof_mnaddr @_swof_rsrc_before+0xa0
+select printf('[ INFO ] @_swof_mnaddr = 0x%08x', @_swof_mnaddr);
+.param set @_swof_mnsize @_swof_reloc_before-@_swof_mnaddr
+select printf('[ INFO ] @_swof_mnsize = 0x%08x', @_swof_mnsize);
 
 select printf('[ INFO ] creating temporary table _swof_newexe...');
 
