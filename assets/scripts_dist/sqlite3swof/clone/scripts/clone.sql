@@ -17,7 +17,6 @@ vacuum;
 
 .mode tabs --quote off
 select printf('[ INFO ] new db size is %d = 0x%x bytes', @_swof_dbsize, @_swof_dbsize);
-select printf('[ INFO ] %d = 0x%x bytes of padding can increase db size up to a multiple of 4096 = 0x1000', @_swof_mempad, @_swof_mempad);
 
 -- file offset of the embedded sqlite db inside @_swof_tmplexe
 .param set @_swof_dbaddr 0x1e5400+0xa0
@@ -130,6 +129,5 @@ drop table _swof_newexe;
 .param unset @_swof_tmplexe
 .param unset @_swof_db
 .param unset @_swof_dbsize
-.param unset @_swof_mempad
 
 .print "[ INFO ] end of clone script."
