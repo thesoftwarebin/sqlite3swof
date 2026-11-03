@@ -524,12 +524,15 @@ FILE *sqlite3_fopen_query(const char *zFilename, const char *zMode, sqlite3* db)
 
 	if (prepare_result == SQLITE_OK){
 		int s = sqlite3_step(pStmt);
-		if (s==SQLITE_ROW || s==SQLITE_DONE){
+		if (s==SQLITE_ROW){
 			const char* txt = (const char*) sqlite3_column_text(pStmt, 0);
 			IFSQLITEDEBUG(fprintf(stderr, "trace: sqlite3_column_text = %s\r\n", txt));
 			FILE* f = fmemopen((void*)txt, strlen(txt)+1, "rb");
 			sqlite3_finalize(pStmt);
 			return f;
+		} else if (s==SQLITE_DONE) {
+			sqlite3_finalize(pStmt);
+			return NULL;
 		} else {
 			IFSQLITEDEBUG(fprintf(stderr, "trace: sqlite3_fopen_query, sqlite3_step failed\r\n"));
 			return NULL;
