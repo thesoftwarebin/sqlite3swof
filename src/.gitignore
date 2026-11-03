@@ -1,0 +1,4 @@
+*.o
+*.exe
+sqlite3swof
+
