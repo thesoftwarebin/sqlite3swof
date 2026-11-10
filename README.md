@@ -2,26 +2,26 @@ sqlite3swof: SQLite3 scripting-without-files
 ============================================
 
 This is a Windows-only experimental modification of the SQLite shell.
+It can embed sqlite databases and scripts inside the shell EXE file, which then behaves as a standalone, single-file EXE application.
 
 
 
-Who may need or like this program?
-----------------------------------
+What does it do at startup?
+---------------------------
 
-Those who prepare SQLite shell scripts for non-technical people.
-
-
-
-What can it do, which shell doesn't do?
---------------------------------------
-
-1) at startup:
 - load an embedded database from the EXE resources
-- execute script `main.sql` stored in database table `sqlar`
+- IF script `main.sql` is stored in database table `sqlar` THEN execute it once
+- IF script `loop.sql` is stored in database table `sqlar` THEN execute it in an infinite loop
 
-2) new commands available during the session:
-- `.read :ar:mypath/myscript.sql`: executes a script read from `sqlar`, not from a file 
-- `.read :query:select ...(scripttext) [from ... where]`: executes the SQL query, takes the first column of first result, interprets it as text and executes it like it't the text of a script
+
+
+Which new commands are available in scripts or interactive sessions?
+--------------------------------------------------------------------
+
+- `.read :ar:mypath/myscript.sql`: executes once a script read from `sqlar`
+- `.read :query:select ...(scripttext) [from ... where]`: takes the first column of first result of the query, interprets it as a script and executes it once
+- `.loop :ar:mypath/myscript.sql`: executes forever in loop a script read from `sqlar`
+- `.loop :query:select ...(scripttext) [from ... where]`: executes the query result as a script forever in loop
 
 
 

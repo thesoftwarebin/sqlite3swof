@@ -543,6 +543,78 @@ FILE *sqlite3_fopen_query(const char *zFilename, const char *zMode, sqlite3* db)
 	}
 }
 
+int sqlite3swof_query_question(sqlite3* db, const char* qry, const int default_no_rows, const int default_err){
+  sqlite3_stmt* pStmt;
+
+  const int prepare_result1 = sqlite3_prepare_v2(
+    db, /* Database handle */
+    qry, /* SQL statement, UTF-8 encoded */
+    -1,  /* Maximum length of zSql in bytes. */
+    &pStmt, /* OUT: Statement handle */
+    NULL           /* OUT: Pointer to unused portion of zSql */
+  ) ;
+
+  if (prepare_result1 == SQLITE_OK){
+    const int s1 = sqlite3_step(pStmt);
+    if (s1 == SQLITE_ROW){
+      const int ret = sqlite3_column_int(pStmt, 0);
+      sqlite3_finalize(pStmt);
+      return ret;
+    } else if (s1 == SQLITE_DONE){
+      sqlite3_finalize(pStmt);
+      return default_no_rows;
+    } else {
+      sqlite3_finalize(pStmt);
+      return default_err;
+    }
+  } else {
+    return default_err;
+  }
+}
+
+enum SQLITE3SWOF_STARTUP_BEHAVIOR {
+  SQLITE3SWOF_STARTUP_BEHAVIOR_INTERACTIVE_SHELL,
+  SQLITE3SWOF_STARTUP_BEHAVIOR_RUN_LOOP,
+  SQLITE3SWOF_STARTUP_BEHAVIOR_RUN_MAIN,
+  SQLITE3SWOF_STARTUP_BEHAVIOR_RUN_MAIN_THEN_LOOP
+};
+
+enum SQLITE3SWOF_STARTUP_BEHAVIOR sqlite3swof_startup_behavior(sqlite3* db){
+  const int has_sqlar = sqlite3swof_query_question(
+    db,
+    "select case when exists (select 1 from sqlite_master where type='table' and name='sqlar') then 1 else 0 end", /* SQL statement, UTF-8 encoded */
+    -1 /*default_no_rows*/,
+    -2 /*default_err*/
+  );
+
+  if (has_sqlar == 1){
+    const int has_main = sqlite3swof_query_question(
+        db,
+        "select case when exists (select 1 from sqlar where name='main.sql') then 1 else 0 end", /* SQL statement, UTF-8 encoded */
+        -1 /*default_no_rows*/,
+        -2 /*default_err*/
+      );
+    const int has_loop = sqlite3swof_query_question(
+      db,
+      "select case when exists (select 1 from sqlar where name='loop.sql') then 1 else 0 end", /* SQL statement, UTF-8 encoded */
+      -1 /*default_no_rows*/,
+      -2 /*default_err*/
+    );
+
+    if (has_main == 1 && has_loop == 1){
+      return SQLITE3SWOF_STARTUP_BEHAVIOR_RUN_MAIN_THEN_LOOP;
+    } else if (has_loop == 1){
+      return SQLITE3SWOF_STARTUP_BEHAVIOR_RUN_LOOP;
+    } else if (has_main == 1){
+      return SQLITE3SWOF_STARTUP_BEHAVIOR_RUN_MAIN;
+    } else {
+      return SQLITE3SWOF_STARTUP_BEHAVIOR_INTERACTIVE_SHELL;
+    }
+  } else {
+    return SQLITE3SWOF_STARTUP_BEHAVIOR_INTERACTIVE_SHELL;
+  }
+}
+
 /*
 ** Work-alike for the popen() routine from the standard C library.
 */
@@ -36617,12 +36689,12 @@ static int do_meta_command(const char *zLine, ShellState *p){
 #endif
 
 #ifndef SQLITE_SHELL_FIDDLE
-  if( c=='r' && n>=3 && cli_strncmp(azArg[0], "read", n)==0 ){
+  if( (c=='r' && n>=3 && cli_strncmp(azArg[0], "read", n)==0 )|| (c=='l' && n>=3 && cli_strncmp(azArg[0], "loop", n)==0)){
     FILE *inSaved = p->in;
     i64 savedLineno = p->lineno;
-    failIfSafeMode(p, "cannot run .read in safe mode");
+    failIfSafeMode(p, "cannot run .read or .loop in safe mode");
     if( nArg!=2 ){
-      eputz("Usage: .read FILE\n");
+      eputz("Usage: .read FILE\n       .loop FILE\n");
       rc = 1;
       goto meta_command_exit;
     }
@@ -36649,6 +36721,11 @@ static int do_meta_command(const char *zLine, ShellState *p){
 	}else{
 	  char *zFilename = strdup(azArg[1]);
 	  rc = process_input(p, zFilename);
+	  // when it's a .loop, then rewind and process file again
+	  while(c=='l' && rc == 0){
+		  fseek(p->in, 0, SEEK_SET);
+		  rc = process_input(p, zFilename);
+	  }
 	  free(zFilename);
 	  fclose(p->in);
 	}
@@ -39787,7 +39864,15 @@ int SQLITE_CDECL main(int argc, char **argv){
 #endif
       data.in = 0;
       open_db(&data, 0);
-      rc = do_meta_command(".read \":ar:main.sql\"", &data);
+
+      enum SQLITE3SWOF_STARTUP_BEHAVIOR behavior = sqlite3swof_startup_behavior(data.db);
+			if (behavior == SQLITE3SWOF_STARTUP_BEHAVIOR_RUN_MAIN || behavior == SQLITE3SWOF_STARTUP_BEHAVIOR_RUN_MAIN_THEN_LOOP) {
+          rc = do_meta_command(".read \":ar:main.sql\"", &data);
+      }
+      if (behavior == SQLITE3SWOF_STARTUP_BEHAVIOR_RUN_LOOP || behavior == SQLITE3SWOF_STARTUP_BEHAVIOR_RUN_MAIN_THEN_LOOP){
+          rc = do_meta_command(".loop \":ar:loop.sql\"", &data);
+      }
+
       rc = process_input(&data, "<stdin>");
       if( zHistory ){
         shell_stifle_history(2000);
@@ -39797,7 +39882,17 @@ int SQLITE_CDECL main(int argc, char **argv){
     }else{
       data.in = stdin;
       open_db(&data, 0);
-      rc = do_meta_command(".read \":ar:main.sql\"", &data);
+
+      enum SQLITE3SWOF_STARTUP_BEHAVIOR behavior = sqlite3swof_startup_behavior(data.db);
+			if (behavior == SQLITE3SWOF_STARTUP_BEHAVIOR_RUN_MAIN || behavior == SQLITE3SWOF_STARTUP_BEHAVIOR_RUN_MAIN_THEN_LOOP) {
+          rc = do_meta_command(".read \":ar:main.sql\"", &data);
+      }
+      if (behavior == SQLITE3SWOF_STARTUP_BEHAVIOR_RUN_LOOP || behavior == SQLITE3SWOF_STARTUP_BEHAVIOR_RUN_MAIN_THEN_LOOP){
+        do {
+          rc = do_meta_command(".read \":ar:loop.sql\"", &data);
+        } while (rc==0);
+      }
+
       rc = process_input(&data, "<stdin>");
     }
   }
